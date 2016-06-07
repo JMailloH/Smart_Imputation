@@ -186,9 +186,33 @@ class KNNI_IS(train: RDD[String], k: Int, distanceType: Int, header: String, num
         timeEndMap = System.nanoTime
         mapTimesArray(i) = ((timeEndMap - timeBegMap) / 1e9).toDouble
 
-        //val holita = resultKNNIPartitioned.collect
-        //println("\n\nholita size => " + holita.length + "\n\n")
-        //for (aux <- holita) { println("@Key => " + aux._1); for (sample <- aux._2) { for (i <- 0 to sample.length - 1) { if (i == 0) { println("\t@Feature => " + sample(i)) } else { println("\t\t@Chicha => " + sample(i)) } }; println() } }
+        val holita = resultKNNIPartitioned.collect
+        println("\n\nholita size => " + holita.length + "\n\n")
+        for (aux <- holita) { println("@Key => " + aux._1); for (sample <- aux._2) { for (i <- 0 to sample.length - 1) { if (i == 0) { println("\t@Feature => " + sample(i)) } else { println("\t\t@Chicha => " + sample(i)) } }; println() } }
+
+        for (aux <- holita) {
+          if (aux._1 == 2177 || aux._1 == 2175) {
+            println("@Key => " + aux._1)
+            var ifDist = false
+            for (sample <- aux._2) {
+              if (!ifDist) {
+                for (i <- 0 until sample.length) {
+                  println("\t@Dist_" + i + " => " + sample(i))
+                }
+                ifDist = true
+              } else {
+                for (i <- 0 until sample.length) {
+                  if (i == 0) {
+                    println("\t@Feature => " + sample(i))
+                  } else {
+                    println("\t\t@Chicha => " + sample(i))
+                  }
+                }
+                println()
+              }
+            }
+          }
+        }
 
         //Join the result of each split.
         timeBegRed = System.nanoTime //Taking the reduce initial time.
@@ -442,9 +466,37 @@ class KNNI_IS(train: RDD[String], k: Int, distanceType: Int, header: String, num
     var res = new Array[(Int, Array[Array[Float]])](imputedData.size)
 
     for (sample <- imputedData) {
+      val size = sample.size()
+      var num_mvs = (size - k) / (k + 1)
+
+      val aux = new Array[Array[Float]](num_mvs + 1)
+      aux(0) = new Array[Float](k)
+      var i = 0
+      while (i < k) {
+        aux(0)(i) = sample.get(i).toFloat
+        i = i + 1
+      }
+
+      var j = 1
+      while (i < size) {
+        aux(j) = new Array[Float](k + 1)
+        var t = 0
+        while (t < k + 1) {
+          aux(j)(t) = sample.get(i).toFloat
+          t = t + 1
+          i = i + 1
+        }
+        j = j + 1
+      }
+      res(indexAux) = (keys(indexAux), aux)
+      indexAux = indexAux + 1
+    }
+
+    /*
+    for (sample <- imputedData) {
       var i = 0
       var size = sample.size()
-      var num_mvs = sample.size() / ((k * 2) + 1)
+      var num_mvs = (sample.size() - k) / (k + 1)
       while (i < size) {
         val aux = new Array[Array[Float]](num_mvs)
         var j = 0
@@ -463,10 +515,32 @@ class KNNI_IS(train: RDD[String], k: Int, distanceType: Int, header: String, num
         res(indexAux) = (keys(indexAux), aux)
         indexAux = indexAux + 1
       }
-    }
+    }*/
     //println("\nTiempo de Cambio estructura => " + ((System.nanoTime() - begTime) / 1e9).toDouble + "\n")
 
-    //for (aux <- res) { println("@Key => " + aux._1); for (sample <- aux._2) { for (i <- 0 to sample.length - 1) { if (i == 0) { println("\t@Feature => " + sample(i)) } else { println("\t\t@Chicha => " + sample(i)) } }; println() } }
+    for (aux <- res) {
+      println("@Key => " + aux._1)
+      if (aux._1 == 2177 || aux._1 == 2175) {
+        var ifDist = false
+        for (sample <- aux._2) {
+          if (!ifDist) {
+            for (i <- 0 until sample.length) {
+              println("\t@Dist_" + i + " => " + sample(i))
+            }
+            ifDist = true
+          } else {
+            for (i <- 0 until sample.length) {
+              if (i == 0) {
+                println("\t@Feature => " + sample(i))
+              } else {
+                println("\t\t@Chicha => " + sample(i))
+              }
+            }
+            println()
+          }
+        }
+      }
+    }
 
     res.iterator
   }
@@ -478,6 +552,73 @@ class KNNI_IS(train: RDD[String], k: Int, distanceType: Int, header: String, num
    * @param mapOut2 Another element of the RDD to join
    */
   def combine(mapOut1: Array[Array[Float]], mapOut2: Array[Array[Float]]): Array[Array[Float]] = {
+    val num_mvs = mapOut1.length
+    var join: Array[Array[Float]] = new Array[Array[Float]](num_mvs)
+    var aux: ArrayBuffer[Float] = new ArrayBuffer[Float]
+
+    //Meto todos los elementos de una de las opciones ordenados.
+    for (i <- 0 until num_mvs) {
+      var itOut1 = 1
+      var itOut2 = 1
+      aux = new ArrayBuffer[Float]
+      aux += mapOut1(0)(0)
+      for (j <- 0 until k) {
+        var t = 1
+        var inserted = false
+        var size = aux.length
+        while (t < size && !inserted) {
+          if (mapOut1(i)(itOut1) < aux(t)) {
+            aux.insert(t, mapOut1(i)(itOut1))
+            aux.insert(t + 1, mapOut1(i)(itOut1 + 1))
+            itOut1 = itOut1 + 2
+            t = t + 2
+            inserted = true
+          } else {
+            t = t + 2
+          }
+        }
+
+        if (!inserted) {
+          aux += mapOut1(i)(itOut1)
+          aux += mapOut1(i)(itOut1 + 1)
+          itOut1 = itOut1 + 2
+        }
+      }
+
+      for (j <- 0 until k) {
+        var t = 1
+        var inserted = false
+        while (t < ((k * 2) + 1) && !inserted) {
+          if (mapOut2(i)(itOut2) < aux(t)) {
+            aux.insert(t, mapOut2(i)(itOut2))
+            aux.insert(t + 1, mapOut2(i)(itOut2 + 1))
+            itOut2 = itOut2 + 2
+            t = t + 2
+            inserted = true
+          } else {
+            t = t + 2
+          }
+        }
+
+        if (inserted) {
+          aux.remove((k * 2) + 1, 2)
+        }
+      }
+
+      join(i) = aux.toArray
+
+    }
+
+    join
+  }
+
+  /**
+   * @brief Join the result of the map
+   *
+   * @param mapOut1 A element of the RDD to join
+   * @param mapOut2 Another element of the RDD to join
+   */
+  def combineOld(mapOut1: Array[Array[Float]], mapOut2: Array[Array[Float]]): Array[Array[Float]] = {
     val num_mvs = mapOut1.length
     var join: Array[Array[Float]] = new Array[Array[Float]](num_mvs)
     var aux: ArrayBuffer[Float] = new ArrayBuffer[Float]

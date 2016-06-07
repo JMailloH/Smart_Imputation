@@ -304,6 +304,31 @@ public class knnImpute {
 		else
 			return Math.sqrt(dist);
 	}
+	
+	/**
+	 * <p>
+	 * Computes the distance between two instances (without previous
+	 * normalization)
+	 * </p>
+	 * 
+	 * @param i
+	 *            First instance
+	 * @param j
+	 *            Second instance
+	 * @return The Euclidean distance between i and j
+	 */
+	protected ArrayList<Double> MVsIndex(Instance i) {
+
+		ArrayList<Double> out = new ArrayList<Double>();
+
+		for (int l = 0; l < nentradas; l++) {
+			if(i.getInputMissingValues(l)){
+				out.add((double)l);
+			}
+		}
+		
+		return out;
+	}
 
 	/**
 	 * <p>
@@ -434,7 +459,7 @@ public class knnImpute {
 	 */
 	public String[][] impute(InstanceAttributes atts) {
 		Instance neighbor;
-		double dist, mean;
+		double dist, mean, maxdist, candidateDist;
 		int actual, totalN;
 		int[] N = new int[nneigh];
 		double[] Ndist = new double[nneigh];
@@ -462,34 +487,43 @@ public class knnImpute {
 				filtered[i] = false;
 				in = 0;
 				out = 0;
+
 				if (inst.existsAnyMissingValue()) {
 
 					// since exists MVs, first we must compute the nearest
 					// neighbors for our instance
+					maxdist = Double.MAX_VALUE;
 					for (int n = 0; n < nneigh; n++) {
 						Ndist[n] = Double.MAX_VALUE;
 						N[n] = -1;
 					}
 					for (int k = 0; k < ndatos; k++) {
 						neighbor = IS.getInstance(k);
+						
+						dist = distance(inst, neighbor, atts);
+						if (dist > 0){ //Leave one out + dont have the same missing attributes
+						//if (!sameMissingInputAttributes(inst, neighbor, atts)) {
+							//dist = distanceOld(inst, neighbor, atts);
+							if(dist < maxdist){
+								actual = -1;
+								candidateDist = Ndist[0];
+								for (int n = 0; n < nneigh; n++) {
 
-						if (!sameMissingInputAttributes(inst, neighbor, atts)) {
-							dist = distance(inst, neighbor, atts);
-
-							actual = -1;
-							for (int n = 0; n < nneigh; n++) {
-								if (dist < Ndist[n]) {
-									if (actual != -1) {
-										if (Ndist[n] > Ndist[actual]) {
+									if (dist < Ndist[n]) {
+										if (actual != -1) {
+											if (Ndist[n] > Ndist[actual]) {
+												candidateDist = Ndist[actual];
+												actual = n;
+											}
+										} else
 											actual = n;
-										}
-									} else
-										actual = n;
+									}
 								}
-							}
-							if (actual != -1) {
-								N[actual] = k;
-								Ndist[actual] = dist;
+								if (actual != -1) {
+									N[actual] = k;
+									Ndist[actual] = dist;
+									maxdist = Math.max(candidateDist,dist);
+								}
 							}
 						}
 
@@ -627,7 +661,9 @@ public class knnImpute {
 		nsalidas = atts.getOutputNumAttributes();
 
 		ArrayList<Double>[] result = (ArrayList<Double>[]) new ArrayList[ndatos2];
-
+		ArrayList<Double> distWithMVsIndex = new ArrayList<Double>();
+		ArrayList<Double> MVsIndex = new ArrayList<Double>();
+		int probando = 0;
 		try {
 
 			for (int i = 0; i < ndatos2; i++) {
@@ -642,14 +678,15 @@ public class knnImpute {
 					N[n] = -1;
 				}
 				
+				MVsIndex = MVsIndex(inst); //TODO - hacerlo en la primera iteracion de k dentro de 'distance'
 				for (int k = 0; k < ndatos; k++) {
 					neighbor = IS.getInstance(k);
-					
-					dist = distance(inst, neighbor, atts);
-					if (dist != -1){ //Leave one out + dont have the same missing attributes
+					dist = distance(inst, neighbor, atts); 
+					if (dist > 0){ //Leave one out + dont have the same missing attributes
 					//if (!sameMissingInputAttributes(inst, neighbor, atts)) {
 						//dist = distanceOld(inst, neighbor, atts);
 						if(dist < maxdist){
+							probando++;
 							actual = -1;
 							candidateDist = Ndist[0];
 							for (int n = 0; n < nneigh; n++) {
@@ -675,8 +712,36 @@ public class knnImpute {
 
 				sum_neigh = sum_neigh.add(BigDecimal.valueOf(System.currentTimeMillis())).subtract(begTime);
 				begTime = BigDecimal.valueOf(System.currentTimeMillis());
-				// Add the key as first element
+				
 				result[i] = new ArrayList<Double>();
+				for (int g = 0; g < nneigh; g++){ // Add the distance to the neighbor
+					if(N[g] != -1)
+						result[i].add((double) Ndist[g]);
+					else
+						result[i].add(Double.MAX_VALUE);
+				}
+
+				double size = MVsIndex.size();
+				for (int t = 0 ; t < size; t++){
+					// Add the index of the missing value
+					result[i].add((double) MVsIndex.get(t));
+					
+					for (int g = 0; g < nneigh; g++) {
+						// Add the value of the neighbor for this feature
+						System.out.println(N[g] + " => " + Ndist[g]);
+						
+						if(N[g] != -1)
+							result[i].add((double) IS.getInstance(N[g]).getAllInputValues()[t]);
+						else
+							result[i].add((double) IS.getInstance(0).getAllInputValues()[t]);
+						
+					}
+				}
+				
+				
+				
+				// Add the key as first element
+				/*result[i] = new ArrayList<Double>();
 				for (int t = 0; t < nentradas; t++) {
 					if (inst.getInputMissingValues(t)) {
 						// Add the index of the missing value
@@ -689,7 +754,7 @@ public class knnImpute {
 									.getAllInputValues()[t]);
 						}
 					}
-				}
+				}*/
 
 				sum = sum.add(BigDecimal.valueOf(System.currentTimeMillis())).subtract(begTime);
 			}
