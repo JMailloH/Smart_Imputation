@@ -87,6 +87,8 @@ object runkNNI_IS extends Serializable {
     val data = sc.textFile(pathTrain: String, numPartitionMap).persist
     //val header = sc.broadcast(sc.textFile(pathHeader: String, 1).collect)
     
+    println("data count => " + data.count)
+    
     val knni = KNNI_IS.setup(data, K, distanceType, pathHeader, numPartitionMap, numReduces, numIterations, maxWeight, version)
     val imputedData = knni.imputation(sc)
     //Write the result: data, times.

@@ -187,8 +187,8 @@ class KNNI_IS(train: RDD[String], k: Int, distanceType: Int, header: String, num
         mapTimesArray(i) = ((timeEndMap - timeBegMap) / 1e9).toDouble
 
         val holita = resultKNNIPartitioned.collect
-        println("\n\nholita size => " + holita.length + "\n\n")
-        for (aux <- holita) { println("@Key => " + aux._1); for (sample <- aux._2) { for (i <- 0 to sample.length - 1) { if (i == 0) { println("\t@Feature => " + sample(i)) } else { println("\t\t@Chicha => " + sample(i)) } }; println() } }
+        //println("\n\nholita size => " + holita.length + "\n\n")
+        //for (aux <- holita) { println("@Key => " + aux._1); for (sample <- aux._2) { for (i <- 0 to sample.length - 1) { if (i == 0) { println("\t@Feature => " + sample(i)) } else { println("\t\t@Chicha => " + sample(i)) } }; println() } }
 
         for (aux <- holita) {
           if (aux._1 == 2177 || aux._1 == 2175) {
@@ -218,12 +218,34 @@ class KNNI_IS(train: RDD[String], k: Int, distanceType: Int, header: String, num
         timeBegRed = System.nanoTime //Taking the reduce initial time.
         var resultJoin = resultKNNIPartitioned.reduceByKey(combine(_, _), numReduces)
         resultJoin.count
+        println("\n\n\n@termino\n\n\n")
         timeEndRed = System.nanoTime
         reduceTimesArray(i) = ((timeEndRed - timeBegRed) / 1e9).toDouble
 
         //Print the middle result
-        //for (aux <- resultJoin) { println("Key => " + aux._1); for (sample <- aux._2) { for (i <- 0 to sample.length - 1) { if (i == 0) { println("\tFeature => " + sample(i)) } else { println("\t\tChicha => " + sample(i)) } }; println() } }
-
+        for (aux <- resultJoin) {
+          if (aux._1 == 2177 || aux._1 == 2175) {
+            println("Key => " + aux._1)
+            var ifDist = false
+            for (sample <- aux._2) {
+              if (!ifDist) {
+                for (i <- 0 until sample.length) {
+                  println("\tDist_" + i + " => " + sample(i))
+                }
+                ifDist = true
+              } else {
+                for (i <- 0 until sample.length) {
+                  if (i == 0) {
+                    println("\tFeature => " + sample(i))
+                  } else {
+                    println("\t\tChicha => " + sample(i))
+                  }
+                }
+                println()
+              }
+            }
+          }
+        }
         //Impute the dataset with the resultJoin obtained.
         timeBegImpt = System.nanoTime //Taking the imputation initial time.
         val only_imputed = trainWithIndex.join(resultJoin).map(sample => impute(sample, atts.value)) //Missing values has been imputed.
@@ -300,21 +322,21 @@ class KNNI_IS(train: RDD[String], k: Int, distanceType: Int, header: String, num
     var Key: Int = sample._1 //Key
     var data: Array[String] = sample._2._1.split(",") //Sample to be imputed
     var infImp: Array[Array[Float]] = sample._2._2 //Information useful to impute
-    var numMiss = infImp.length
+    var numMiss = infImp.length - 1
     var indexMissFeat: Array[Int] = new Array[Int](numMiss) //Index of the missing values.
     //var information: Array[Float] = new Array[Float](numMiss)
     for (x <- 0 until numMiss) {
-      indexMissFeat(x) = infImp(x)(0).toInt
+      indexMissFeat(x) = infImp(x+1)(0).toInt
     }
 
-    var aux_i = 0
+    var aux_i = 1
     for (i <- indexMissFeat) {
       var a = atts.getAttribute(i)
       var tipo = a.getType()
       if (tipo != Attribute.NOMINAL) {
         var mean = 0.0
         for (m <- 1 to k) { //Iterate over information 
-          mean += infImp(aux_i)(m * 2)
+          mean += infImp(aux_i)(m)
         }
 
         if (tipo == Attribute.INTEGER)
@@ -337,11 +359,11 @@ class KNNI_IS(train: RDD[String], k: Int, distanceType: Int, header: String, num
         var popular: Float = 0.0.toFloat
         var count: Int = 0
 
-        for (m <- 0 until k) {
-          if (popMap contains infImp(aux_i)(m * 2)) {
-            popMap += (infImp(aux_i)(m * 2) -> (popMap(infImp(aux_i)(m * 2)) + 1))
+        for (m <- 1 to k) {
+          if (popMap contains infImp(aux_i)(m)) {
+            popMap += (infImp(aux_i)(m) -> (popMap(infImp(aux_i)(m)) + 1))
           } else {
-            popMap += (infImp(aux_i)(m * 2) -> 1)
+            popMap += (infImp(aux_i)(m) -> 1)
           }
         }
 
@@ -519,8 +541,8 @@ class KNNI_IS(train: RDD[String], k: Int, distanceType: Int, header: String, num
     //println("\nTiempo de Cambio estructura => " + ((System.nanoTime() - begTime) / 1e9).toDouble + "\n")
 
     for (aux <- res) {
-      println("@Key => " + aux._1)
       if (aux._1 == 2177 || aux._1 == 2175) {
+        println("@Key => " + aux._1)
         var ifDist = false
         for (sample <- aux._2) {
           if (!ifDist) {
@@ -552,64 +574,74 @@ class KNNI_IS(train: RDD[String], k: Int, distanceType: Int, header: String, num
    * @param mapOut2 Another element of the RDD to join
    */
   def combine(mapOut1: Array[Array[Float]], mapOut2: Array[Array[Float]]): Array[Array[Float]] = {
-    val num_mvs = mapOut1.length
-    var join: Array[Array[Float]] = new Array[Array[Float]](num_mvs)
-    var aux: ArrayBuffer[Float] = new ArrayBuffer[Float]
+    val num_mvs = mapOut1.length - 1 //First array is about the distances
+    var result: Array[Array[Float]] = new Array[Array[Float]](num_mvs + 1)
 
-    //Meto todos los elementos de una de las opciones ordenados.
-    for (i <- 0 until num_mvs) {
-      var itOut1 = 1
-      var itOut2 = 1
-      aux = new ArrayBuffer[Float]
-      aux += mapOut1(0)(0)
-      for (j <- 0 until k) {
-        var t = 1
-        var inserted = false
-        var size = aux.length
-        while (t < size && !inserted) {
-          if (mapOut1(i)(itOut1) < aux(t)) {
-            aux.insert(t, mapOut1(i)(itOut1))
-            aux.insert(t + 1, mapOut1(i)(itOut1 + 1))
-            itOut1 = itOut1 + 2
-            t = t + 2
-            inserted = true
-          } else {
-            t = t + 2
+    var join: Array[ArrayBuffer[Float]] = new Array[ArrayBuffer[Float]](num_mvs + 1)
+    join(0) = new ArrayBuffer[Float]
+    for (i <- 1 to num_mvs) {
+      join(i) = new ArrayBuffer[Float]
+      join(i).append(mapOut1(i)(0)) //MVs index as first element
+    }
+
+    //var aux: ArrayBuffer[Float] = new ArrayBuffer[Float]
+    //Sorting all the candidates of mapOut1
+    for (i <- 0 until k) {
+      var inserted = false
+      //aux = new ArrayBuffer[Float]
+      var t = 0
+      var size = join(0).length
+      while (t < size && !inserted) {
+        if (mapOut1(0)(i) < join(0)(t)) {
+          join(0).insert(t, mapOut1(0)(i)) //Distance
+          for (l <- 1 to num_mvs) { //Values for this neigh and all the MVs of this instances
+            join(l).insert(t + 1, mapOut1(l)(i + 1))
           }
+          inserted = true
         }
-
-        if (!inserted) {
-          aux += mapOut1(i)(itOut1)
-          aux += mapOut1(i)(itOut1 + 1)
-          itOut1 = itOut1 + 2
-        }
+        t = t + 1
       }
 
-      for (j <- 0 until k) {
-        var t = 1
-        var inserted = false
-        while (t < ((k * 2) + 1) && !inserted) {
-          if (mapOut2(i)(itOut2) < aux(t)) {
-            aux.insert(t, mapOut2(i)(itOut2))
-            aux.insert(t + 1, mapOut2(i)(itOut2 + 1))
-            itOut2 = itOut2 + 2
-            t = t + 2
-            inserted = true
-          } else {
-            t = t + 2
-          }
-        }
-
-        if (inserted) {
-          aux.remove((k * 2) + 1, 2)
+      if (!inserted) {
+        join(0) += mapOut1(0)(i) //Distance
+        for (l <- 1 to num_mvs) { //Value for this neigh
+          join(l) += mapOut1(l)(i + 1)
         }
       }
-
-      join(i) = aux.toArray
 
     }
 
-    join
+    //Sort and combine the candidates from mapOut2
+    for (i <- 0 until k) {
+      var inserted = false
+      //aux = new ArrayBuffer[Float]
+      var t = 0
+      var size = join(0).length
+      while (t < size && !inserted) {
+        if (mapOut2(0)(i) < join(0)(t)) {
+          join(0).insert(t, mapOut2(0)(i)) //Distance
+          for (l <- 1 to num_mvs) { //Values for this neigh and all the MVs of this instances
+            join(l).insert(t + 1, mapOut2(l)(i + 1))
+          }
+          inserted = true
+        }
+        t = t + 1
+      }
+
+      if (inserted) {
+        join(0).remove(k) //Distance
+        for (l <- 1 to num_mvs) { //Value for this neigh
+          join(l).remove(k + 1)
+        }
+      }
+
+    }
+    var joinLenght = join.length
+    for (i <- 0 until joinLenght) {
+      result(i) = join(i).toArray
+    }
+
+    result
   }
 
   /**

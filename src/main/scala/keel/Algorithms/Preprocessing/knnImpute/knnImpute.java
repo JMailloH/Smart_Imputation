@@ -727,9 +727,7 @@ public class knnImpute {
 					result[i].add((double) MVsIndex.get(t));
 					
 					for (int g = 0; g < nneigh; g++) {
-						// Add the value of the neighbor for this feature
-						System.out.println(N[g] + " => " + Ndist[g]);
-						
+						// Add the value of the neighbor for this feature						
 						if(N[g] != -1)
 							result[i].add((double) IS.getInstance(N[g]).getAllInputValues()[t]);
 						else
