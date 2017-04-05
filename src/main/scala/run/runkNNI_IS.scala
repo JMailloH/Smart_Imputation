@@ -8,7 +8,7 @@ import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.mllib.preprocessing.kNNI_IS.KNNI_IS
 import org.apache.log4j.Logger
 //import utils.parserKeel.KeelParser
-import utils.KeelParser
+import utils.keel.KeelParser
 import keel.Dataset
 import java.util.Scanner
 import keel.Dataset.InstanceSet
@@ -47,7 +47,8 @@ object runkNNI_IS extends Serializable {
     var outDisplay: String = pathOutput
 
     //Basic setup
-    val jobName = "Maillo - kNNI_IS -> " + outDisplay + " K = " + K
+    val nameDataset = pathTrain.substring(1 + pathTrain.lastIndexOf("/"), pathTrain.length - 7)
+    val jobName = "kNNI_IS => Dataset: " + nameDataset + " K: " + K + " Mode: " + version
 
     //Spark Configuration
     val conf = new SparkConf().setAppName(jobName)
@@ -66,67 +67,16 @@ object runkNNI_IS extends Serializable {
     }
     logger.info("=> version \"" + version + "\"")
 
-    //val typeConversion = KeelParser.parseHeaderFile(sc, pathHeader)
-    //val bcTypeConv = sc.broadcast(typeConversion)
-    //val testRaw = sc.textFile(pathTest: String, numPartitionMap)
-    //val MVsRaw = testRaw.map(line => KeelParser.parseLabeledPoint(bcTypeConv.value, line)).cache
-    //MVsRaw.count
-    //println("\n\n\n" + MVsRaw.first() + "\n\n\n")
-
-    /*
-      val parsed = converter.parserToDouble(line)
-      val featureVector = Vectors.dense(parsed.init)
-      val label = parsed.last
-      LabeledPoint(label, featureVector)
-    }.persist
-
-    */
-
     //Reading header of the dataset and dataset
-    val converter = new KeelParser(sc, pathHeader)
     val data = sc.textFile(pathTrain: String, numPartitionMap).persist
-    //val header = sc.broadcast(sc.textFile(pathHeader: String, 1).collect)
-    
+
     println("data count => " + data.count)
-    
+
     val knni = KNNI_IS.setup(data, K, distanceType, pathHeader, numPartitionMap, numReduces, numIterations, maxWeight, version)
     val imputedData = knni.imputation(sc)
+    
     //Write the result: data, times.
     knni.writeResults(sc, pathOutput, data = true, times = true)
-
-    /*println("\n\n@Local Web UI at: http://localhost:4040/jobs/\n\tPress any key to end ...")
-    var in = ""
-    var inScanner = new Scanner(System.in)
-    in = inScanner.nextLine()*/
-    /*
-    if (version == "mllib") {
-
-    } else {
-      val sqlContext = new org.apache.spark.sql.SQLContext(train.context)
-      import sqlContext.implicits._
-
-      var outPathArray: Array[String] = new Array[String](1)
-      outPathArray(0) = pathOutput
-      val knn = new org.apache.spark.ml.classification.kNNI_IS.kNNI_ISClassifier()
-        .setLabelCol("label")
-        .setFeaturesCol("features")
-        .setK(K)
-        .setDistanceType(distanceType)
-        .setConverter(converter)
-        .setNumPartitionMap(numPartitionMap)
-        .setNumReduces(numReduces)
-        .setNumIter(numIterations)
-        .setMaxWeight(maxWeight)
-        .setNumSamplesTest(test.count.toInt)
-        .setOutPath(outPathArray)
-
-      // Chain indexers and tree in a Pipeline
-      val pipeline = new Pipeline().setStages(Array(knn))
-
-      // Train model.  This also runs the indexers.
-      val model = pipeline.fit(train.toDF())
-      val predictions = model.transform(test.toDF())
-    }
-*/ }
+  }
 
 }

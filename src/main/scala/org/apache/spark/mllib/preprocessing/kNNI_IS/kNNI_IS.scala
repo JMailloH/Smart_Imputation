@@ -8,11 +8,8 @@ import org.apache.spark.mllib.linalg.Vectors
 import org.apache.spark.mllib.regression.LabeledPoint
 import scala.collection.mutable.ListBuffer
 import keel.Dataset.InstanceSet
-import keel.Algorithms.Lazy_Learning.LazyAlgorithm
-import keel.Algorithms.Lazy_Learning.KNN
-import keel.Algorithms.Lazy_Learning.KNN.KNN
 import keel.Algorithms.Preprocessing.knnImpute.knnImpute
-import utils.Utils
+import utils.keel.Utils
 import java.util.ArrayList
 import java.util.Arrays
 import scala.collection.JavaConverters._
@@ -23,6 +20,17 @@ import scala.io.Source
 
 /**
  * @author Jesus Maillo
+ *
+ * Impute with k Nearest Neighbors Imputation methods with approximate or original approach.
+ * @param train dataset with missing values
+ * @param k the number of neighbors to consider while the imputation
+ * @param distanceType Euclidean or Manhattan
+ * @param header String to the header file
+ * @param numPartitionMap Number of map tasks
+ * @param numReduces Number of reduces tasks
+ * @param numIterations Number of iteration
+ * @param maxWeight Maximum weight of each partition
+ * @param version Approximate or exact approach
  */
 
 class KNNI_IS(train: RDD[String], k: Int, distanceType: Int, header: String, numPartitionMap: Int, numReduces: Int, numIterations: Int, maxWeight: Double, version: String) extends Serializable {
@@ -33,9 +41,8 @@ class KNNI_IS(train: RDD[String], k: Int, distanceType: Int, header: String, num
   val MVs = trainWithIndex.filter(line => line._2.contains("?")).sortByKey().persist
   val notMVs = trainWithIndex.subtractByKey(MVs).map(sample => sample._2.split(","))persist
   private val numSamplesMVs = MVs.count()
-  private val numClass = 0 //converter.getNumClassFromHeader()
-  private val numFeatures = 0 //converter.getNumFeaturesFromHeader()
-  private val headerString: String = Source.fromFile(header).mkString
+  private val numClass = 0
+  private val numFeatures = 0
 
   var atts: InstanceAttributes = null
 
@@ -57,7 +64,9 @@ class KNNI_IS(train: RDD[String], k: Int, distanceType: Int, header: String, num
 
   //Output variables
   private var imputedData: RDD[Array[String]] = null
+  private var rightPredictedClasses: Array[Array[Array[Int]]] = null
 
+  // Getters
   def getTrain: RDD[String] = train
   def getMVs: RDD[(Int, String)] = MVs
   def getK: Int = k
@@ -66,30 +75,13 @@ class KNNI_IS(train: RDD[String], k: Int, distanceType: Int, header: String, num
   def getNumReduces: Int = numReduces
   def getMaxWeight: Double = maxWeight
   def getNumIterations: Int = numIterations
-
-  //Output
-  private var rightPredictedClasses: Array[Array[Array[Int]]] = null
-
-  def getRightPredictedClasses(): Array[Array[Array[Int]]] = {
-    rightPredictedClasses
-  }
-
-  def getMapTimes(): Array[Double] = {
-    mapTimesArray
-  }
-
-  def getReduceTimes(): Array[Double] = {
-    reduceTimesArray
-  }
-
-  def getIterativeTimes(): Array[Double] = {
-    iterativeTimesArray
-  }
-
-  //private var MVsBroadcast: Broadcast[Array[Array[Double]]] = null
+  def getRightPredictedClasses(): Array[Array[Array[Int]]] = { rightPredictedClasses }
+  def getMapTimes(): Array[Double] = { mapTimesArray }
+  def getReduceTimes(): Array[Double] = { reduceTimesArray }
+  def getIterativeTimes(): Array[Double] = { iterativeTimesArray }
 
   /**
-   * Initial setting necessary.
+   * Basic initialization.
    */
   def setup(): KNNI_IS = {
 
@@ -97,7 +89,7 @@ class KNNI_IS(train: RDD[String], k: Int, distanceType: Int, header: String, num
     var weightTrain = 0.0
     var weightMVs = 0.0
 
-    if (version == "bag-model") {
+    if (version == "approximate-model") {
       numIter = 1
 
     } else {
@@ -157,10 +149,10 @@ class KNNI_IS(train: RDD[String], k: Int, distanceType: Int, header: String, num
 
     var atts = broadcastAtts(Utils.readHeaderFromFile(header), sc)
 
-    if (version == "bag-model") {
+    if (version == "approximate-model") {
       timeBegMap = System.nanoTime
 
-      imputedData = train.mapPartitions(split => kNNI_bag(split, atts)).cache
+      imputedData = train.mapPartitions(split => kNNI_approximate(split, atts)).cache
       imputedData.count
 
       timeEndMap = System.nanoTime
@@ -170,93 +162,28 @@ class KNNI_IS(train: RDD[String], k: Int, distanceType: Int, header: String, num
     } else {
 
       //Taking the iterative initial time.
-      for (i <- 0 to numIter - 1) {
+      for (i <- 0 until numIter) {
         timeBegIterative = System.nanoTime
-
+        
         if (i == numIter - 1) {
           MVsBroadcast = broadcastMVs(MVs.filterByRange(subdel, topdel * 2).collect, sc)
         } else {
           MVsBroadcast = broadcastMVs(MVs.filterByRange(subdel, topdel).collect, sc)
         }
+        //Calling KNNI (Map Phase) and join the result of each split.
+        //var resultJoin = train.mapPartitions(split => kNNI_exact(split, MVsBroadcast, atts)).reduceByKey(combine(_, _), numReduces).cache
 
-        //Calling KNNI (Map Phase)    
-        timeBegMap = System.nanoTime //Taking the map initial time.
-        var resultKNNIPartitioned = train.mapPartitions(split => kNNI_exact(split, MVsBroadcast, atts)).cache //.collect
-        resultKNNIPartitioned.count
-        timeEndMap = System.nanoTime
-        mapTimesArray(i) = ((timeEndMap - timeBegMap) / 1e9).toDouble
-
-        val holita = resultKNNIPartitioned.collect
-        //println("\n\nholita size => " + holita.length + "\n\n")
-        //for (aux <- holita) { println("@Key => " + aux._1); for (sample <- aux._2) { for (i <- 0 to sample.length - 1) { if (i == 0) { println("\t@Feature => " + sample(i)) } else { println("\t\t@Chicha => " + sample(i)) } }; println() } }
-
-        for (aux <- holita) {
-          if (aux._1 == 2177 || aux._1 == 2175) {
-            println("@Key => " + aux._1)
-            var ifDist = false
-            for (sample <- aux._2) {
-              if (!ifDist) {
-                for (i <- 0 until sample.length) {
-                  println("\t@Dist_" + i + " => " + sample(i))
-                }
-                ifDist = true
-              } else {
-                for (i <- 0 until sample.length) {
-                  if (i == 0) {
-                    println("\t@Feature => " + sample(i))
-                  } else {
-                    println("\t\t@Chicha => " + sample(i))
-                  }
-                }
-                println()
-              }
-            }
-          }
+        //Impute the dataset with the  resultJoin obtained.
+        if (imputedData == null) {
+          imputedData = (notMVs union (trainWithIndex.join(train.mapPartitions(split => kNNI_exact(split, MVsBroadcast, atts)).reduceByKey(combine(_, _), numReduces)).map(sample => impute(sample, atts.value)))).cache
+        } else {
+          imputedData = imputedData union (trainWithIndex.join(train.mapPartitions(split => kNNI_exact(split, MVsBroadcast, atts)).reduceByKey(combine(_, _), numReduces)).map(sample => impute(sample, atts.value))).cache
         }
-
-        //Join the result of each split.
-        timeBegRed = System.nanoTime //Taking the reduce initial time.
-        var resultJoin = resultKNNIPartitioned.reduceByKey(combine(_, _), numReduces)
-        resultJoin.count
-        println("\n\n\n@termino\n\n\n")
-        timeEndRed = System.nanoTime
-        reduceTimesArray(i) = ((timeEndRed - timeBegRed) / 1e9).toDouble
-
-        //Print the middle result
-        for (aux <- resultJoin) {
-          if (aux._1 == 2177 || aux._1 == 2175) {
-            println("Key => " + aux._1)
-            var ifDist = false
-            for (sample <- aux._2) {
-              if (!ifDist) {
-                for (i <- 0 until sample.length) {
-                  println("\tDist_" + i + " => " + sample(i))
-                }
-                ifDist = true
-              } else {
-                for (i <- 0 until sample.length) {
-                  if (i == 0) {
-                    println("\tFeature => " + sample(i))
-                  } else {
-                    println("\t\tChicha => " + sample(i))
-                  }
-                }
-                println()
-              }
-            }
-          }
-        }
-        //Impute the dataset with the resultJoin obtained.
-        timeBegImpt = System.nanoTime //Taking the imputation initial time.
-        val only_imputed = trainWithIndex.join(resultJoin).map(sample => impute(sample, atts.value)) //Missing values has been imputed.
-        imputedData = notMVs union only_imputed //Union in order to have all the data set.
         imputedData.count
-        timeEndImpt = System.nanoTime
-        imputationTimesArray(i) = ((timeEndImpt - timeBegImpt) / 1e9).toDouble
-
-        timeEndIterative = System.nanoTime
-
-        iterativeTimesArray(i) = ((timeEndIterative - timeBegIterative) / 1e9).toDouble
+        //Update the pairs of delimiters
+        subdel = topdel + 1
+        topdel = topdel + inc + 1
+        MVsBroadcast.destroy
       }
 
     }
@@ -307,13 +234,7 @@ class KNNI_IS(train: RDD[String], k: Int, distanceType: Int, header: String, num
   }
 
   /**
-   * @brief Calculate the K nearest neighbor from the MVs set over the train set.
-   *
-   * @param iter Data that iterate the RDD of the train set
-   * @param MVsSet The MVs set in a broadcasting
-   * @param classes number of label for the objective class
-   * @param numNeighbors Value of the K nearest neighbors to calculate
-   * @param distanceType MANHATTAN = 1 ; EUCLIDEAN = 2 ; HVDM = 3
+   * @brief Missing values has imputed with the information of the map.
    */
   def impute(sample: (Int, (String, Array[Array[Float]])), atts: InstanceAttributes): Array[String] = {
     var begTime = System.nanoTime()
@@ -326,7 +247,7 @@ class KNNI_IS(train: RDD[String], k: Int, distanceType: Int, header: String, num
     var indexMissFeat: Array[Int] = new Array[Int](numMiss) //Index of the missing values.
     //var information: Array[Float] = new Array[Float](numMiss)
     for (x <- 0 until numMiss) {
-      indexMissFeat(x) = infImp(x+1)(0).toInt
+      indexMissFeat(x) = infImp(x + 1)(0).toInt
     }
 
     var aux_i = 1
@@ -374,26 +295,6 @@ class KNNI_IS(train: RDD[String], k: Int, distanceType: Int, header: String, num
           }
         }
 
-        /*
-        var count: Int = 1
-        var tempCount: Int = 0
-        var popular: Float = infImp(0)(2)
-        var temp: Float = 0
-
-        for (m <- 1 to k - 1) {
-          temp = infImp(aux_i)(m * 2)
-          tempCount = 0
-          for (m2 <- 2 to k) {
-            if (temp == infImp(aux_i)(m2 * 2)) {
-              tempCount += 1
-            }
-          }
-          if (tempCount > count) {
-            popular = temp
-            count = tempCount
-          }
-        }
-				*/
         data(i) = new String(String.valueOf(popular))
       }
       aux_i = aux_i + 1
@@ -411,16 +312,14 @@ class KNNI_IS(train: RDD[String], k: Int, distanceType: Int, header: String, num
    * @param numNeighbors Value of the K nearest neighbors to calculate
    * @param distanceType MANHATTAN = 1 ; EUCLIDEAN = 2 ; HVDM = 3
    */
-  def kNNI_bag[T](iter: Iterator[String], atts: Broadcast[InstanceAttributes]): Iterator[Array[String]] = { //Iterator[(Int, Array[Array[Float]])] = { //Si queremos un Pair RDD el iterador seria iter: Iterator[(Long, Array[Double])]
+  def kNNI_approximate[T](iter: Iterator[String], atts: Broadcast[InstanceAttributes]): Iterator[Array[String]] = { //Iterator[(Int, Array[Array[Float]])] = { //Si queremos un Pair RDD el iterador seria iter: Iterator[(Long, Array[Double])]
 
-    println("\n\n@entro al map con modelo bolsas\n\n")
     var begTime = System.nanoTime()
     var auxTime = System.nanoTime()
     var auxSet = new ArrayList[String]
 
     println("@atribute" + atts.value.getAttribute(0))
 
-    //Utils.readHeader(headerString)
     var IS = new InstanceSet()
 
     var i: Int = 1
@@ -429,17 +328,12 @@ class KNNI_IS(train: RDD[String], k: Int, distanceType: Int, header: String, num
       auxSet.add(cur.toString())
       i += 1
     }
-    //logger.info(auxSet.toString()+"\n")
     IS.readSet(auxSet, false, atts.value)
     println("DATA: Num Instances ---------------------------" + IS.getNumInstances)
 
     var knni = new knnImpute(IS, k)
-    //var imputedData: Array[Array[String]] = new Array[Array[String]](i)
     var imputedData = knni.impute(atts.value)
-    /*imputedData(i - 1) = new Array[String](2)
-    imputedData(i - 1)(0) = "@time"
-    imputedData(i - 1)(1) = ((System.nanoTime - begTime) / 1e9).toFloat.toString()
-*/
+
     imputedData.iterator
   }
 
@@ -459,7 +353,6 @@ class KNNI_IS(train: RDD[String], k: Int, distanceType: Int, header: String, num
     val keys: Array[Int] = MVs.value.map(_._1)
     val MVs_sample: Array[String] = MVs.value.map(_._2)
 
-    //Utils.readHeader(headerString)
     var IS: InstanceSet = new InstanceSet()
     var IS_MVs: InstanceSet = new InstanceSet()
 
@@ -470,20 +363,17 @@ class KNNI_IS(train: RDD[String], k: Int, distanceType: Int, header: String, num
       auxSet.add(cur.toString())
       i += 1
     }
-    //logger.info(auxSet.toString()+"\n")
     IS.readSet(auxSet, false, atts.value)
     IS_MVs.readSet(MVs_sample, false, atts.value)
 
     println("DATA: Num Instances ---------------------------" + IS.getNumInstances)
 
-    //println("\nTiempo de lectura => " + ((System.nanoTime() - begTime) / 1e9).toDouble + "\n")
     begTime = System.nanoTime()
 
     var knni = new knnImpute(IS, IS_MVs, k)
     val imputedData = knni.imputeDistributed(atts.value)
     var indexAux = 0
 
-    println("\nTiempo de imputeDistributed => " + ((System.nanoTime() - begTime) / 1e9).toDouble + "\n")
     begTime = System.nanoTime()
     var res = new Array[(Int, Array[Array[Float]])](imputedData.size)
 
@@ -514,56 +404,6 @@ class KNNI_IS(train: RDD[String], k: Int, distanceType: Int, header: String, num
       indexAux = indexAux + 1
     }
 
-    /*
-    for (sample <- imputedData) {
-      var i = 0
-      var size = sample.size()
-      var num_mvs = (sample.size() - k) / (k + 1)
-      while (i < size) {
-        val aux = new Array[Array[Float]](num_mvs)
-        var j = 0
-
-        while (j < num_mvs) {
-          aux(j) = new Array[Float](1 + (k * 2))
-          var t = 0
-          while (t < (1 + (k * 2))) {
-
-            aux(j)(t) = sample.get(i).toFloat
-            t = t + 1
-            i = i + 1
-          }
-          j = j + 1
-        }
-        res(indexAux) = (keys(indexAux), aux)
-        indexAux = indexAux + 1
-      }
-    }*/
-    //println("\nTiempo de Cambio estructura => " + ((System.nanoTime() - begTime) / 1e9).toDouble + "\n")
-
-    for (aux <- res) {
-      if (aux._1 == 2177 || aux._1 == 2175) {
-        println("@Key => " + aux._1)
-        var ifDist = false
-        for (sample <- aux._2) {
-          if (!ifDist) {
-            for (i <- 0 until sample.length) {
-              println("\t@Dist_" + i + " => " + sample(i))
-            }
-            ifDist = true
-          } else {
-            for (i <- 0 until sample.length) {
-              if (i == 0) {
-                println("\t@Feature => " + sample(i))
-              } else {
-                println("\t\t@Chicha => " + sample(i))
-              }
-            }
-            println()
-          }
-        }
-      }
-    }
-
     res.iterator
   }
 
@@ -584,7 +424,6 @@ class KNNI_IS(train: RDD[String], k: Int, distanceType: Int, header: String, num
       join(i).append(mapOut1(i)(0)) //MVs index as first element
     }
 
-    //var aux: ArrayBuffer[Float] = new ArrayBuffer[Float]
     //Sorting all the candidates of mapOut1
     for (i <- 0 until k) {
       var inserted = false
@@ -642,209 +481,6 @@ class KNNI_IS(train: RDD[String], k: Int, distanceType: Int, header: String, num
     }
 
     result
-  }
-
-  /**
-   * @brief Join the result of the map
-   *
-   * @param mapOut1 A element of the RDD to join
-   * @param mapOut2 Another element of the RDD to join
-   */
-  def combineOld(mapOut1: Array[Array[Float]], mapOut2: Array[Array[Float]]): Array[Array[Float]] = {
-    val num_mvs = mapOut1.length
-    var join: Array[Array[Float]] = new Array[Array[Float]](num_mvs)
-    var aux: ArrayBuffer[Float] = new ArrayBuffer[Float]
-
-    //Meto todos los elementos de una de las opciones ordenados.
-    for (i <- 0 until num_mvs) {
-      var itOut1 = 1
-      var itOut2 = 1
-      aux = new ArrayBuffer[Float]
-      aux += mapOut1(i)(0)
-      for (j <- 0 until k) {
-        var t = 1
-        var inserted = false
-        var size = aux.length
-        while (t < size && !inserted) {
-          if (mapOut1(i)(itOut1) < aux(t)) {
-            aux.insert(t, mapOut1(i)(itOut1))
-            aux.insert(t + 1, mapOut1(i)(itOut1 + 1))
-            itOut1 = itOut1 + 2
-            t = t + 2
-            inserted = true
-          } else {
-            t = t + 2
-          }
-        }
-
-        if (!inserted) {
-          aux += mapOut1(i)(itOut1)
-          aux += mapOut1(i)(itOut1 + 1)
-          itOut1 = itOut1 + 2
-        }
-      }
-
-      for (j <- 0 until k) {
-        var t = 1
-        var inserted = false
-        while (t < ((k * 2) + 1) && !inserted) {
-          if (mapOut2(i)(itOut2) < aux(t)) {
-            aux.insert(t, mapOut2(i)(itOut2))
-            aux.insert(t + 1, mapOut2(i)(itOut2 + 1))
-            itOut2 = itOut2 + 2
-            t = t + 2
-            inserted = true
-          } else {
-            t = t + 2
-          }
-        }
-
-        if (inserted) {
-          aux.remove((k * 2) + 1, 2)
-        }
-      }
-
-      join(i) = aux.toArray
-
-    }
-
-    join
-
-    /*val num_mvs = mapOut1.length
-    val numNeighbors = k
-
-    var out: Array[ArrayBuffer[Float]] = new Array[ArrayBuffer[Float]](num_mvs)
-    var res: Array[Array[Float]] = new Array[Array[Float]](num_mvs)
-    for (i <- 0 to num_mvs - 1) {
-      out(i) = new ArrayBuffer()
-      out(i).insert(0, mapOut1(i)(0))
-      var itOut1 = 1
-      var itOut2 = 1
-
-      while ((itOut1 < (numNeighbors * 2) - 1) || (itOut2 < (numNeighbors * 2) - 1)) {
-        if (itOut1 >= (numNeighbors * 2)) {
-          var iter = 1
-          var exit = false
-          while (iter <= out(i).length && !exit) {
-            if (out(i).length == iter) {
-              out(i).insert(iter, mapOut2(i)(itOut2))
-              out(i).insert(iter + 1, mapOut2(i)(itOut2 + 1))
-              exit = true
-            } else if (out(i)(iter) > mapOut2(i)(itOut2)) {
-              out(i).insert(iter, mapOut2(i)(itOut2))
-              out(i).insert(iter + 1, mapOut2(i)(itOut2 + 1))
-              exit = true
-            }
-            iter = iter + 2
-          }
-          itOut2 = itOut2 + 2
-
-        } else if (itOut2 >= (numNeighbors * 2)) {
-          var iter = 1
-          var exit = false
-          while (iter <= out(i).length && !exit) {
-            if (out(i).length == iter) {
-              out(i).insert(iter, mapOut1(i)(itOut1))
-              out(i).insert(iter + 1, mapOut1(i)(itOut1 + 1))
-              exit = true
-            } else if (out(i)(iter) > mapOut1(i)(itOut1)) {
-              out(i).insert(iter, mapOut1(i)(itOut1))
-              out(i).insert(iter + 1, mapOut1(i)(itOut1 + 1))
-              exit = true
-            }
-            iter = iter + 2
-          }
-          itOut1 = itOut1 + 2
-        } else if (mapOut1(i)(itOut1) < mapOut2(i)(itOut2)) {
-          //Insertar mirando desde el principio y desplazando los demas.
-          var iter = 1
-          var exit = false
-          while (iter <= out(i).length && !exit) {
-            if (out(i).length == iter) {
-              out(i).insert(iter, mapOut1(i)(itOut1))
-              out(i).insert(iter + 1, mapOut1(i)(itOut1 + 1))
-              exit = true
-            } else if (out(i)(iter) > mapOut1(i)(itOut1)) {
-              out(i).insert(iter, mapOut1(i)(itOut1))
-              out(i).insert(iter + 1, mapOut1(i)(itOut1 + 1))
-              exit = true
-            }
-            iter = iter + 2
-          }
-          itOut1 = itOut1 + 2
-        } else {
-          //Insertar mirando desde el principio y desplazando los demas.
-          var iter = 1
-          var exit = false
-          while (iter <= out(i).length && !exit) {
-            if (out(i).length == iter) {
-              out(i).insert(iter, mapOut2(i)(itOut2))
-              out(i).insert(iter + 1, mapOut2(i)(itOut2 + 1))
-              exit = true
-            } else if (out(i)(iter) > mapOut2(i)(itOut2)) {
-              out(i).insert(iter, mapOut2(i)(itOut2))
-              out(i).insert(iter + 1, mapOut2(i)(itOut2 + 1))
-              exit = true
-            }
-            iter = iter + 2
-          }
-          itOut2 = itOut2 + 2
-        }
-      }
-    }
-
-    for (i <- 0 to num_mvs - 1) {
-      res(i) = new Array[Float]((numNeighbors * 2) + 1)
-      res(i) = out(i).take((numNeighbors * 2) + 1).toArray
-    }
-    res*/
-
-    /*
-    //Print the middle result
-    for (sample <- out) {
-      for (i <- 0 to sample.length - 1) {
-        if (i == 0) {
-          println("\tFeature => " + sample(i))
-        } else {
-          println("\t\tChicha => " + sample(i))
-        }
-      }
-      println()
-    }
-		*/
-
-    /*
-    //Print the middle result
-    for (sample <- out) {
-      for (i <- 0 to sample.length - 1) {
-        if (i == 0) {
-          println("\tFeature => " + sample(i))
-        } else {
-          println("\t\tChicha => " + sample(i))
-        }
-      }
-      println()
-    }
-		*/
-
-    /*
-    val num_mvs = mapOut1.length
-
-    for (i <- 0 until num_mvs) {
-      var itOut1 = 1
-      var itOut2 = 1
-      for (j <- 0 until k) {
-        if (mapOut1(i)(itOut1) <= mapOut2(i)(itOut2)) {
-          mapOut2(i)(itOut2) = mapOut1(i)(itOut1)
-          mapOut2(i)(itOut2 + 1) = mapOut1(i)(itOut1 + 1)
-          itOut2 = itOut2 + 2
-        } else {
-          itOut1 = itOut1 + 2
-        }
-      }
-    }
-
-    mapOut2*/
   }
 
 }

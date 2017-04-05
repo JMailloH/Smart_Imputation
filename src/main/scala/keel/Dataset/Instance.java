@@ -1128,6 +1128,16 @@ public class Instance {
 	public String getOutputNominalValues(int pos) {
 		return nominalValues[1][pos];
 	}// end getOutputNominalValues
+	
+	/**
+	 * Get Output Nominal Values
+	 * 
+	 * @return a string with the indicated nominal output value.
+	 */
+	public String getOutputNominalValuesFeature(int pos) {
+		System.out.println("nominalValues[1][0]: " + nominalValues[1][0]);
+		return nominalValues[1][pos];
+	}// end getOutputNominalValues
 
 	/**
 	 * It does return the output value at the specified position

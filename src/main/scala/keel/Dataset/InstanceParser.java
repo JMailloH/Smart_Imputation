@@ -98,6 +98,7 @@ public class InstanceParser{
   public InstanceParser( String fileName, boolean _isTrain ) {
     try {
         br=new BufferedReader(new FileReader(fileName));
+        //br=new BufferedReader(new FileReader("/home/maillo/kNNI_IS/header/kddcup_10_normal_versus_DOS.header"));
         lineCounter = 0;
     } catch(Exception e) {
         e.printStackTrace();
