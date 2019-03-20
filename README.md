@@ -12,8 +12,8 @@ We present an open-source Spark package about an imputation algorithm based on k
 
 ## Cite this software as:
 
-[Reference]
- 
+I. Triguero, D. García-Gil, J. Maillo, J. Luengo, S. García, F. Herrera. Transforming big data into smart data: An insight on the use of the k nearest neighbors algorithm to obtain quality data. Wiley Interdisciplinary Reviews. Data Mining and Knowledge Discovery. e1289. doi: 10.1002/widm.1289
+
 # How to use
 
 ## Pre-requiriments
